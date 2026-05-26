@@ -1,0 +1,719 @@
+\documentclass[uplatex,dvipdfmx,report]{jlreq}
+\usepackage[fleqn,tbtags]{mathtools}
+\usepackage{jlreq-deluxe}
+\usepackage[noalphabet]{pxchfon}
+\usepackage{stix2}
+\usepackage{hira-stix}
+\usepackage{url}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,shapes.misc,fit,calc}
+
+% 部番号を算用数字にする
+\renewcommand{\thepart}{\arabic{part}}
+
+\begin{document}
+
+% --- タイトルページ ---
+\title{ハッカソン 〜計画書と設計書〜}
+\author{
+  チーム4 \\
+  25G1062 佐藤 夏美 \\
+}
+\date{2026年5月13日 Version 0.2}
+\maketitle
+\clearpage
+
+% --- 目次ページ ---
+\tableofcontents
+\clearpage
+
+
+%############################################################
+%  第1部：クラリネットパート設計
+%############################################################
+\part{クラリネットパート設計}
+
+%============================================================
+\chapter{クラリネットパートの基本設計}
+%============================================================
+
+本章は，操作者（演奏者・聴き手）の視点からクラリネットパートの構成・動作・状態遷移を定めるものである．
+プロジェクト全体は4楽器（クラリネット・フルート・オルガン・リズム楽器）がそれぞれ独立したArduinoを1台ずつ持つ構成をとる．
+指揮者ArduinoがI2C経由で各楽器ArduinoにSYNC（同期）メッセージを配信し，各楽器ArduinoはそのSYNCメッセージを基準に発音タイミングを制御する．各楽器ArduinoはUSBシリアルで音符データをPCへ送信し，PC上のProcessingが各楽器の音色を合成・出力することで合奏が成立する．
+本章ではそのうちクラリネットパートに関する基本設計および詳細設計を記す．
+
+
+
+
+
+%-----------------------------
+\section{クラリネットパートの概要}
+%-----------------------------
+
+クラリネット用Arduinoは，「きらきら星」のクラリネットパートを担当する．
+指揮者用Arduinoの合図に合わせて音符データをPC（Processing）へ送信し，Processingがクラリネットらしい音色で合成・発音する．
+
+
+
+
+
+
+%-----------------------------
+\section{機能一覧}
+%-----------------------------
+
+クラリネットパートが提供する機能を以下に示す．
+
+\begin{description}
+  \item[楽曲データ保持機能] \mbox{}\\
+    クラリネット用Arduinoは，「きらきら星」クラリネットパートの音符列を内部の楽曲配列として事前に保持する．
+    各音符は楽器種別・音程（ノート番号）・音量（ベロシティ）・音長の4つで構成される．
+    Arduinoは配列の内容を順に送信する．演奏開始までの待機期間は休符として配列に含め，自パートの入りのタイミングから旋律を送信する．
+  \item[逐次送信機能] \mbox{}\\
+    演奏開始後，Arduinoは指揮者Arduinoからの同期信号を基準に楽曲配列の先頭から1音ずつ，設定されたテンポに基づく発音タイミングが来るたびに次の音符データをUSBシリアル経由でPCへ送信する．
+    送信フォーマットはチーム共通の5バイトバイナリ形式とし，ヘッダ，楽器種別，音程，音量，音長を持つ．
+    テンポはSYNCメッセージに含まれるBPM値を受信することで更新され，可変に対応する．
+  \item[クラリネット音色合成・再生機能] \mbox{}\\
+    ProcessingがArduinoからデータを受信次第，音程（ノート番号）・音量（ベロシティ）・音長などから適切な音色を即時発音する．
+    音色はMinimライブラリによる加算合成にローパスフィルタおよびADSRエンベロープを組み合わせた構成で，実測FFTスペクトルから算出した倍音テーブルを用いて閉管楽器特有の奇数倍音優勢のスペクトルを再現する．
+\end{description}
+
+
+
+
+
+
+
+
+%-----------------------------
+\section{システム構成図}
+%-----------------------------
+
+クラリネットパートに関わる構成要素を図\ref{fig:sys}に示す．
+\begin{figure}[H]
+\centering
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+ \centering
+\includegraphics[width=16cm]{./Figs/system.png}
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+\caption{クラリネットパートのシステム構成（フルート・オルガン・リズム楽器も同様）}
+%\vspace{-1.0\baselineskip}
+\label{fig:sys}
+\end{figure}
+
+
+Arduinoが楽曲データの保持と逐次送信を担当し，PC上のProcessingが受信・音色合成・音響出力を担当する．
+音声出力はすべてProcessing（PC側）が行う．
+
+
+
+
+
+
+%-----------------------------
+\section{操作インターフェース設計}
+%-----------------------------
+
+演奏の開始は全楽器一斉に行うため，クラリネット単体での開始スイッチは設けない．
+全体の演奏制御（開始の合図・テンポ変更）は指揮者Arduino側で行い，クラリネット用Arduinoはその同期信号を受けて動作する．
+
+
+
+
+
+
+%-----------------------------
+\section{状態遷移図}
+%-----------------------------
+
+クラリネットパートの状態遷移を図\ref{fig:state_clarinet}に示す．
+状態は「待機」「演奏中」「終了」の3つとし，指揮者Arduinoからの開始合図の受信および楽曲終端への到達で遷移が起こる．
+
+\begin{figure}[H]
+\centering
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+ \centering
+\includegraphics[width=16cm]{./Figs/seni.png}
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+\caption{クラリネットパートの状態遷移図}
+%\vspace{-1.0\baselineskip}
+\label{fig:state_clarinet}
+\end{figure}
+
+演奏中は入りまでの期間を休符として管理し，SYNCメッセージで受け取ったBPMをもとにArduinoが発音タイミングを計算して音符データを送信する．
+Processing側は音符データを受信次第即時発音する．
+
+
+
+
+%============================================================
+\chapter{クラリネットパートの詳細設計}
+%============================================================
+
+本章では，クラリネットパートを実装するための詳細設計を記す．
+
+
+%-----------------------------
+\section{部品一覧}
+%-----------------------------
+
+
+\begin{table}[H]
+  \centering
+  \caption{クラリネットパートの部品一覧}
+  \label{tab:pbs}
+  \begin{tabular}{l l l}
+    \toprule
+    分類 & 部品名 & 用途 \\
+    \midrule
+    ハードウェア & Arduino UNO R4 Wi-Fi & 楽曲配列保持・逐次送信 \\
+    ハードウェア & USBケーブル & PC接続・電源供給 \\
+    ハードウェア & PC（スピーカー内蔵） & Processing動作・音響出力 \\
+    ソフトウェア & Arduino IDE & 楽曲データ等書き込み \\
+    ソフトウェア & Processing & 音色合成・再生 \\
+    ライブラリ & Minim (ddf.minim.*) & Oscil, MoogFilter, ADSR, Noise, WavetableGenerator \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+%-----------------------------
+\section{ソフトウェア設計}
+%-----------------------------
+
+\subsection{フォーマット}
+
+クラリネット用ArduinoからPCへの送信はチーム共通の5バイトバイナリ形式で行う．バイナリ形式とはコンピュータが理解できる「0」と「1」の2進数（ビット）で情報を表現するデータ形式である．バイナリ形式を採用した理由は，テキスト送信と比べてデータ量が少なく通信が軽量になるためである．またノート番号についても，きらきら星で使用するドレミファソラの6音に対して独自の番号（0〜5）を割り当てることで1バイトに収める．
+
+\noindent\textbf{注意：}ヘッダバイトの値および楽器種別の番号割り当ては4楽器合わせてチームで統一する必要がある（現時点では仮値）．
+
+\begin{table}[H]
+  \centering
+  \caption{1音あたりの送信フレーム（5バイト，仮値）}
+  \label{tab:proto}
+  \small
+  \begin{tabular}{c p{18mm} p{18mm} p{65mm}}
+    \toprule
+    バイト & 名称 & 値（仮） & 意味 \\
+    \midrule
+    1バイト目 & ヘッダ & \texttt{0xAA} &
+      フレーム開始の目印（同期バイト） \\
+    2バイト目 & 楽器種別 & 0--3 &
+      フルート=0，クラリネット=1，オルガン=2，リズム=3 \\
+    3バイト目 & ノート番号 & 0--5 &
+      きらきら星で使う音の番号．0=C4，1=D4，2=E4，3=F4，4=G4，5=A4 \\
+    4バイト目 & ベロシティ & 0--127 &
+      音の強さ．Processing側で0.0〜1.0に正規化し振幅に反映する． \\
+    5バイト目 & 音長 & 0--255 &
+      10ミリ秒単位．Processing側で10を掛けてミリ秒に戻す．
+      音長の終端でProcessingが自動的にnoteOff()を呼び消音する． \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+
+
+
+
+
+
+%-----------------------------
+\section{関数仕様}
+%-----------------------------
+
+\paragraph{ClarinetInstrument(float freq, float velocity, float length)}
+\begin{description}
+  \item[引数] \verb|freq|：音の周波数（Hz），\verb|velocity|：振幅（0.0〜1.0，ベロシティを正規化した値），\verb|length|：音長（秒）
+  \item[戻り値] なし（コンストラクタ）
+  \item[内容] 音声合成の処理経路を構築する．トーン系統，リードノイズ系統，低域空気感系統を生成する．
+\end{description}
+
+\paragraph{noteOn(float duration)}
+\begin{description}
+  \item[引数] \verb|duration|：発音時間（秒）
+  \item[戻り値] なし
+  \item[内容] MinimのplayNote()から自動的に呼ばれる．\verb|mainEnv|・\verb|reedEnv|・\verb|breathEnv|を\verb|AudioOutput|にパッチして発音を開始する．\verb|duration|秒後に\verb|noteOff()|が自動的に呼ばれる．
+\end{description}
+
+\paragraph{noteOff()}
+\begin{description}
+  \item[引数] なし
+  \item[戻り値] なし
+  \item[内容] Minimから自動的に呼ばれる．\verb|mainEnv|・\verb|reedEnv|・\verb|breathEnv|それぞれの\verb|noteOff()|を呼び，Releaseフェーズ終了後に\verb|unpatchAfterRelease(out)|で自動切断する．
+\end{description}
+
+
+
+
+
+%-----------------------------
+\section{音色パラメータ}
+%-----------------------------
+
+\begin{table}[H]
+  \centering
+  \caption{クラリネット音色のパラメータ}
+  \label{tab:tone}
+  \begin{tabular}{l l}
+    \toprule
+    パラメータ & 値 \\
+    \midrule
+    ベース波形 & 加算合成（\verb|WavetableGenerator.gen10|） \\
+    倍音構成 & h1〜h16（奇数倍音優勢） \\
+    トーン用LPF遮断周波数 & 音程連動（ノート周波数に比例） \\
+    \textbf{mainEnv}（トーン用ADSR） & \\
+    \quad Attack & 0.400\,s （仮）\\
+    \quad Decay & 0.040\,s （仮）\\
+    \quad Sustain & 0.95（仮） \\
+    \quad Release & 0.300\,s （仮）\\
+    \textbf{reedEnv}（リードノイズ用ADSR） & \\
+    \quad 帯域 & 1200\,Hz〜2800\,Hz（仮） \\
+    \quad Attack & 0.010\,s（仮） \\
+    \quad Sustain & 0.05（仮） \\
+    \quad Release & 0.080\,s（仮） \\
+    \textbf{breathEnv}（低域空気感用ADSR） & \\
+    \quad 帯域 & 80\,Hz以下（仮） \\
+    \quad Attack・Release & mainEnvと同じ（仮） \\
+    全体振幅 & ベロシティに連動 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+各値の根拠を以下に記す．
+
+\textbf{ベース波形：}
+矩形波は倍音振幅が$1/h$の固定比率のため，クラリネットの細かい特徴を再現できない．
+加算合成を採用し，表\ref{tab:fft}の実測FFT解析値をもとに倍音振幅を設定した．
+
+\begin{table}[H]
+  \centering
+  \caption{実測FFT解析結果（クラリネット C4，Audacity・Hann窓）}
+  \label{tab:fft}
+  \begin{tabular}{c c c r r}
+    \toprule
+    倍音 & 種別 & 実測周波数 & 実測レベル [dB] & 基音比 [dB] \\
+    \midrule
+    第1（基音） & 奇数 & 263\,Hz（C4）  & $-23.2$ & $0$ \\
+    第2         & 偶数 & 523\,Hz（C5）  & $-71.0$ & $-47.8$ \\
+    第3         & 奇数 & 788\,Hz（G5）  & $-21.5$ & $+1.7$ \\
+    第4         & 偶数 & 1049\,Hz（C6） & $-56.0$ & $-32.8$ \\
+    第5         & 奇数 & 1312\,Hz（E6） & $-30.2$ & $-7.0$ \\
+    第6         & 偶数 & 1573\,Hz（G6） & $-62.4$ & $-39.2$ \\
+    第7         & 奇数 & 1835\,Hz（A$\flat$6） & $-40.8$ & $-17.6$ \\
+    第8         & 偶数 & 2097\,Hz（C7） & $-51.4$ & $-28.2$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{ADSR：}
+トーン・リードノイズ・低域空気感の3系統を独立して制御することで，リードが振動し始めるクラリネット固有の発音特性を再現する方針とする．
+
+\textbf{フィルタ：}
+カットオフをノート周波数に連動させることで，音程によらず一定の音色を保つ方針とする．
+
+
+
+
+%-----------------------------
+\section{Processing側の処理フロー}
+%-----------------------------
+
+
+クラリネットパートの処理フローを図\ref{fig:flow_clarinet}に示す．
+
+\begin{figure}[H]
+\centering
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+ \centering
+\includegraphics[width=13cm]{./Figs/crafulo.pdf}
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+\caption{クラリネットパートの処理フロー}
+%\vspace{-1.0\baselineskip}
+\label{fig:flow_clarinet}
+\end{figure}
+
+
+
+
+
+
+%-----------------------------
+\section{テストの設計}
+%-----------------------------
+
+\subsection{T1：スペクトル検証}
+
+Audacity で FFT 解析を行い，実測クラリネット音源（freesound.org 番号248359，C4相当）と比較する．奇数倍音中心の倍音構造などを確認する．
+
+Audacity の Hann 窓に設定してスペクトル解析を行い，表\ref{tab:fft}の実測値と比較する．
+FFTサイズが小さい場合（例：4096）は周波数分解能が低くピークが横に広がって見えるため，同一条件での比較が必要である．
+
+\subsection{T2：聴感比較テスト}
+
+実際のクラリネット単音録音と合成音を並べて再生し，「クラリネットらしく聞こえるか」をチームメンバーで聴認する．管楽器らしい立ち上がりなどを確認する．
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+%############################################################
+%  第2部：同期システム設計
+%############################################################
+\part{同期システム設計}
+
+%============================================================
+\chapter{同期システムの基本設計}
+%============================================================
+
+本章は，操作者（演奏者）の視点から同期システムの構成・操作方法・状態遷移を定めるものである．
+プロジェクト全体は4楽器（クラリネット・フルート・オルガン・リズム楽器）がそれぞれ独立したArduinoを1台ずつ持つ構成をとる．
+指揮者ArduinoがI2C経由で各楽器ArduinoにSYNCメッセージを配信し，各楽器ArduinoはそのSYNCメッセージを基準に発音タイミングを制御する．各楽器ArduinoはUSBシリアルで音符データをPCへ送信し，PC上のProcessingが各楽器の音色を合成・出力することで合奏が成立する．
+本章ではそのうち同期システムに関する基本設計および詳細設計を記す．
+
+%-----------------------------
+\section{同期システム概要}
+%-----------------------------
+
+複数のArduinoが指揮者Arduinoの合図に合わせて「きらきら星」を輪唱形式で演奏するシステムである．
+モーターが1周したことを検知すると演奏が開始される．
+各楽器は自身の入りまでの期間を休符として管理し，楽器A・B・Cが2小節ずつずれて順番に旋律の演奏を開始することで，時間差で同一の旋律が重なり合う輪唱が成立する．
+
+\begin{description}
+  \item[曲目] きらきら星（12小節，4/4拍子）
+  \item[編成] 指揮者兼モーター制御Arduino×1，楽器Arduino×3，リズムArduino×1（計5台）
+  \item[操作者の入力] モーターの回転による演奏開始の合図
+  \item[システムの出力] 楽器音（スピーカー）
+\end{description}
+
+%-----------------------------
+\section{機能一覧}
+%-----------------------------
+
+\begin{description}
+  \item[演奏開始検知機能] \mbox{}\\
+    指揮者Arduinoはモーターの1周を検知し，演奏開始の合図とする．
+    検知方法の詳細は未確定（相談中）．
+  \item[SYNCメッセージ配信機能] \mbox{}\\
+    指揮者Arduinoは毎小節頭に現在の小節番号（\verb|global_bar|）と
+    BPMをI2C経由で全スレーブへ順番に送信する．
+  \item[PLL補正機能] \mbox{}\\
+    各楽器Arduino（スレーブ）はSYNCメッセージを受信するたびに，
+    予測時刻と実際の受信時刻の差を計算し次の小節長を微調整する．
+    これによりスレーブ個体のクリスタルドリフト（水晶発振子の個体差による時刻誤差の蓄積）を防ぎ，
+    全楽器が指揮者Arduinoに追従する．
+  \item[輪唱機能（各スレーブにて設定するものである．）] \mbox{}\\
+    各楽器Arduinoは入りまでの期間を休符として管理し，所定の小節から旋律の演奏を開始する．
+   具体的には，以下のタイミングで各パートが順次発音を開始する．
+   \begin{verbatim}
+   0小節目 → 楽器A・リズムが演奏開始（楽器B・Cは休符）
+   2小節目 → 楽器Bが演奏開始（楽器Cは休符）
+   4小節目 → 楽器Cが演奏開始
+   \end{verbatim}
+   全楽器が同一の指揮者Arduinoに追従することで，楽器間の直接通信なしに同期が実現される．
+\end{description}
+
+%-----------------------------
+\section{同期システム構成図}
+%-----------------------------
+同期システムに関わる構成要素を図\ref{fig:sys_all}に示す．ただし，全体の流れがわかるように各スレーブ以降の流れも示している．
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=16cm]{./Figs/doukisystem.png}
+\caption{同期システム全体構成図}
+\label{fig:sys_all}
+\end{figure}
+
+指揮者Arduinoがモーターの1周を検知して他の全Arduinoへ開始合図（SYNC）を送信すると，合図を受けた各Arduino（楽器・リズム）が自身の担当パートの演奏データをPCへ送り，最終的にPC上のProcessingがそのデータをもとに音色を合成してスピーカーから出力する．
+
+
+
+%-----------------------------
+\section{操作インターフェース}
+%-----------------------------
+
+\subsection{操作者が使用する入力}
+
+\begin{table}[H]
+  \centering
+  \caption{操作者の入力一覧}
+  \begin{tabular}{l l l}
+    \toprule
+    入力 & 場所 & 動作 \\
+    \midrule
+    電源ON & 指揮者Arduino & システム起動 \\
+    電源OFF & 指揮者Arduino & 演奏停止 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{操作者が確認できる出力}
+
+\begin{table}[H]
+  \centering
+  \caption{操作者への出力一覧}
+  \begin{tabular}{l l l}
+    \toprule
+    出力 & 場所 & 内容 \\
+    \midrule
+    音声 & スピーカー（PC） & 各楽器の音色で輪唱が鳴る \\
+    モーターの回転 & 指揮者Arduino & 1周検知で演奏開始 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+
+
+
+
+%-----------------------------
+\section{状態遷移図（指揮者）}
+%-----------------------------
+同期システムの状態遷移を図\ref{fig:state_master}に示す．
+状態は「電源オフ」「待機」「演奏中」「演奏終了」の4つとし，電源投入により待機状態となる．その後，モーターの1周検知を演奏開始の合図として「演奏中」へ遷移し，同期データの送信を行う．楽曲の終端へ到達すると「演奏終了」へ遷移し，その後は次の演奏に向けて「待機」状態へ戻るか，電源オフとなる．
+
+\begin{figure}[H]
+\centering
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+ \centering
+\includegraphics[width=16cm]{./Figs/doukiseni.png}
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+\caption{状態遷移図（指揮者）}
+%\vspace{-1.0\baselineskip}
+\label{fig:state_master}
+\end{figure}
+
+
+
+
+
+
+
+
+
+%============================================================
+\chapter{同期システムの詳細設計}
+%============================================================
+
+本章では，同期システムを実装するための詳細設計を記す．
+
+%-----------------------------
+\section{部品一覧}
+%-----------------------------
+
+\begin{table}[H]
+  \centering
+  \caption{同期システムの部品一覧}
+  \begin{tabular}{l l l}
+    \toprule
+    分類 & 部品名 & 用途 \\
+    \midrule
+    ハードウェア & Arduino UNO R4 Wi-Fi × 5 & 指揮者兼モーター制御1台・楽器3台・リズム1台 \\
+    ハードウェア & PC（スピーカー） × 5 & Processingでの音色合成・音響出力 \\
+    ハードウェア & ジャンパ線 & I2C配線（SDA・SCL・GND） \\
+    ハードウェア & モーター & モーター1周の回転駆動 \\
+    ハードウェア & USBケーブル × 5 & PC接続・電源供給 \\
+    ソフトウェア & Arduino IDE & プログラム書き込み \\
+    ライブラリ & Wire.h & I2C通信 \\
+    ライブラリ & Arduino\_LED\_Matrix.h & LEDマトリクス表示 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+%-----------------------------
+\section{ハードウェア設計}
+%-----------------------------
+
+\subsection{I2C配線}
+試作した同期システムの配線を図\ref{fig:haisen1}，図\ref{fig:haisen2}に示す．
+I2Cはバス接続のため，全ArduinoのSDA・SCL・GNDを共有する．実際はスレーブがあと2つ接続される．
+
+\begin{figure}[H]
+\centering
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+ \centering
+\includegraphics[width=15cm]{./Figs/haisen1.png}
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+\caption{I2C配線}
+%\vspace{-1.0\baselineskip}
+\label{fig:haisen1}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+ \centering
+\includegraphics[width=15cm]{./Figs/haisen2.png}
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+\caption{I2C配線（回路図）}
+%\vspace{-1.0\baselineskip}
+\label{fig:haisen2}
+\end{figure}
+
+\textbf{注意：} ArduinoのWireライブラリはスレーブに1台ずつ順番に送信するため，スレーブごとに受信タイミングが約0.5\,msずつ異なる．
+このズレは蓄積しない固定オフセットであり，人間の聴覚閾値（約20〜30\,ms）を大幅に下回るため，現時点では許容している．
+
+
+\subsection{モーター配線}
+
+モーターの具体的な配線・ピン割り当ては未確定（実機テストで確定予定）．
+
+%-----------------------------
+\section{ソフトウェア設計}
+%-----------------------------
+
+
+\subsection{ファイル構成}
+
+\begin{table}[H]
+  \centering
+  \caption{ファイル構成}
+  \begin{tabular}{l l}
+    \toprule
+    ファイル名 & 内容 \\
+    \midrule
+    \verb|master.ino| & 指揮者Arduino：SYNCメッセージ配信・テンポ管理 \\
+    \verb|slave1.ino| & 楽器Arduino：SYNCメッセージ受信・発音タイミング制御 \\
+    \verb|slave2.ino| & 楽器Arduino：SYNCメッセージ受信・発音タイミング制御 \\
+    \verb|slave3.ino| & 楽器Arduino：SYNCメッセージ受信・発音タイミング制御 \\
+    \verb|slave4.ino| & 楽器Arduino：SYNCメッセージ受信・発音タイミング制御 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+現時点では簡単な同期動作確認として\verb|master.ino|・\verb|slave1.ino|・\verb|slave2.ino|の3ファイルで動作の確認を行った．
+\verb|slave1.ino|と\verb|slave2.ino|はI2Cアドレスのみ異なり（\verb|0x10|と\verb|0x11|），それ以外の処理は同一である．
+
+
+
+
+%-----------------------------
+\section{処理フローの設計}
+%-----------------------------
+同期システムの処理フローを図\ref{fig:flow_douki}に示す．
+
+\begin{figure}[H]
+\centering
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+ \centering
+\includegraphics[width=16cm]{./Figs/doukifulo.pdf}
+%\vspace{\baselineskip}
+%\vspace{-1.5\baselineskip}
+\caption{指揮者とスレーブについての同期システムの処理フロー}
+%\vspace{-1.0\baselineskip}
+\label{fig:flow_douki}
+\end{figure}
+
+
+%-----------------------------
+\section{テストの設計}
+%-----------------------------
+
+\subsection{実施済みテスト：I2C同期動作確認}
+
+指揮者Arduino 1台とスレーブArduino 2台を実機接続し，I2C経由でCONFIG・START・SYNCの送受信が正しく動作することを確認した．
+
+\subsection{今後のテスト}
+
+\begin{itemize}
+  \item モーターの1周検知による演奏開始の動作確認
+  \item PLL補正を実装した後の長時間同期精度の確認
+  \item 楽器Arduinoとの組み合わせによる輪唱動作の確認
+\end{itemize}
+
+
+
+%-----------------------------
+\section{補足：センサーを用いた可変テンポについての思案}
+%-----------------------------
+
+現時点では固定BPMでの同期動作確認にとどまっているが，エンターテインメント性の向上を目的として以下の可変テンポ機能の実装を思案している．
+
+\subsection{構成}
+
+\begin{description}
+  \item[モーター] ステッピングモーター（28BYJ-48 5V）+ ULN2003ドライバモジュール
+  \item[速度調整] 可変抵抗（つまみ）によるモーターの回転速度の調整
+  \item[1周検知] フォトリフレクタによるモーターの1周検知
+\end{description}
+
+\subsection{動作の流れ}
+
+操作者がつまみを操作することでモーターの回転速度が変化する．
+フォトリフレクタが1周を検知するたびに1周にかかった時間を計測し，時間の範囲に応じてBPMを段階的に分類する（表\ref{tab:bpm_proposal}では例として3段階に設定）．
+分類されたBPMは次の小節頭のSYNCメッセージに乗せて全楽器へ反映される．
+
+\begin{table}[H]
+  \centering
+  \caption{1周の時間とBPMの対応（具体的な値は実機テストで確定）}
+  \label{tab:bpm_proposal}
+  \begin{tabular}{l l}
+    \toprule
+    1周にかかった時間 & BPM \\
+    \midrule
+    短い（高速回転） & 速い（例：120\,BPM） \\
+    中程度 & 普通（例：90\,BPM） \\
+    長い（低速回転） & 遅い（例：60\,BPM） \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+具体的なBPMの値と時間の範囲は28BYJ-48の実際の回転速度を実機で計測した上で確定する予定である．
+
+\subsection{エンターテインメント性}
+
+モーターの回転速度がそのまま音楽のテンポに対応するため，操作者がモーターの回る速さを変えると音楽のテンポも変わるという視覚と音楽が連動した演出が実現できる．
+\end{document}
