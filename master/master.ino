@@ -7,7 +7,6 @@
 //   SYNC   = 0x01  [CMD][bar_H][bar_L][bpm_H][bpm_L]  5バイト
 //   START  = 0x10  [CMD]                               1バイト
 //   CONFIG = 0x11  [CMD][entry_offset][loop_length][part_id]  4バイト
-//   ※ 計画書では CONFIG=0x12 だが、現実装では 0x11 を使用
 
 // I²C 通信ライブラリ
 #include <Wire.h>
